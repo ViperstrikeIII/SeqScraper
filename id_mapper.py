@@ -3,6 +3,7 @@ import socket
 import argparse
 import re
 import requests
+import time
 
 # ---------------------
 # Argument Config
@@ -21,9 +22,16 @@ parser.add_argument("-g", "--gene-names",
                     required=True,
                     help='path to text file of gene names (one line per gene)')
 
+parser.add_argument("-o", "--output-file",
+                    type=str,
+                    required=False,
+                    default="my_gene_mapping.tsv",
+                    help='path to output tsv file')
+
 args = parser.parse_args()
 
 GENE_FILE = args.gene_names
+OUTPUT_TSV = args.output_file
 
 format_str = (
     f'[%(asctime)s {socket.gethostname()}] '
@@ -68,10 +76,12 @@ def post_idmapping_job(gene_list: list[str]) -> str:
     """
     uniprot_url = "https://rest.uniprot.org/idmapping/run"
     submission = {
-        "from" : "Gene Name",
-        "to" : "UniProtKB/Swiss-Prot",
-        "ids" : ",".join(gene_list)
+        "from": "Gene_Name",
+        "to": "UniProtKB-Swiss-Prot",
+        "ids": ",".join(gene_list),
     }
+    logging.info(f"Attempting to post job request to {uniprot_url}")
+
     try:
         response = requests.post(uniprot_url, data=submission, timeout=(3.05,30))
         response.raise_for_status() # Check if API job went through
@@ -87,12 +97,127 @@ def post_idmapping_job(gene_list: list[str]) -> str:
     # Make sure rest of script doesn't run
     return None
 
+def get_job_status(job_id: str) -> bool:
+    """
+    Checks the status of uniprot id mapping job
+
+    Args:
+        job_id: ID of uniprot job
+
+    Returns:
+        True: Job finished
+        False: Job still running
+        None: Job failed
+    """
+    status_url = "https://rest.uniprot.org/idmapping/status"
+
+    try:
+        response = requests.get(f"{status_url}/{job_id}", timeout=(3.05, 10), allow_redirects=False)
+        response.raise_for_status()
+        status_data = response.json()
+        job_status = status_data.get("jobStatus")
+
+        if response.status_code == 303:
+            logging.info(f"Job {job_id} finished (Detected via 303 Redirect).")
+            return True
+        
+        if job_status == "FINISHED":
+            logging.info(f"Job {job_id} finished.")
+            return True
+        
+        if job_status == "FAILED":
+            logging.error(f"Job failed! Reason: {status_data.get('errors')}")
+            return None
+        
+        logging.debug("Job still not finished.")
+        return False
+    except requests.exceptions.HTTPError as e:
+        logging.error(f"HTTP error occured: {e}")
+        return None
+    except requests.exceptions.Timeout as e:
+        logging.error(f"Request to status endpoint failed: {e}")
+        return None
+
+def fetch_uniprot_data(job_id, output_filename="results.tsv"):
+    """
+    Read in data from uniprot data stream using job id. Output results to tsv.
+
+    Args:
+        job_id: ID of uniprot job
+        output_filename: Where to output results
+
+    Returns:
+        None: Outputs to file
+    """
+    url = f"https://rest.uniprot.org/idmapping/uniprotkb/results/stream/{job_id}"
+    
+    params = {
+        "format": "tsv",
+        "fields": "accession,reviewed,id,protein_name,gene_names,organism_name,length,sequence",
+        "compressed": "false"
+    }
+    
+    logging.info(f"Fetching protein data from: {url}")
+
+    try:
+        with requests.get(url, params=params, stream=True) as response:
+            response.raise_for_status()
+            
+            # Writing data chunk by chunk to avoid ram overflow
+            with open(output_filename, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                    
+        logging.info(f"Download complete. Wrote to {output_filename}")
+        return
+
+    except Exception as e:
+        logging.error(f"Failed to fetch data: {e}")
+        return
 
 def main():
-    with open(GENE_FILE, "r") as f:
-        raw_gene_string = f.read()
-        gene_list = parse_gene_file(raw_gene_string)
+    # Convert text file into list of genes
+    try:
+        with open(GENE_FILE, "r") as f:
+            raw_gene_string = f.read()
+            gene_list = parse_gene_file(raw_gene_string)
+    except FileNotFoundError:
+        logging.error(f"Input gene name file {GENE_FILE} cannot be found.")
+        return
+
+    # Post job id
+    if gene_list:
+        job_id = post_idmapping_job(gene_list)
+    else:
+        logging.warning("Gene List is empty. No job submission made.")
+        return
+
+    # Check job status
+    job_is_ready = False
+    if job_id:
+        status = False
+        logging.info("Attempting to poll for results")
+
+        for attempt in range(1,21):
+            status = get_job_status(job_id)
+            if status is True:
+                logging.info("Job finished! Ready to download.")
+                job_is_ready = True
+                break
+            elif status is None:
+                logging.error("A critical error or Job Failure occurred.")
+                break
+            logging.info(f"Attempt {attempt} - Job not finished. Retrying in {5 * attempt} seconds.")
+            time.sleep(5 * attempt)
+    else:
+        logging.warning("Job ID not found.")
+
+    if job_is_ready:
+        success = fetch_uniprot_data(job_id, OUTPUT_TSV)
+        if success:
+            logging.info(f"Workflow complete. Check {OUTPUT_TSV} for results.")
     
+
     
 if __name__ == "__main__":
     main()
