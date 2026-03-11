@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import logging
 import socket
 import argparse
@@ -153,7 +154,7 @@ def fetch_uniprot_data(job_id, output_filename="results.tsv"):
     
     params = {
         "format": "tsv",
-        "fields": "accession,reviewed,id,protein_name,gene_names,organism_name,length,sequence",
+        "fields": "accession,id,protein_name,gene_names,organism_name,length,sequence",
         "compressed": "false"
     }
     
