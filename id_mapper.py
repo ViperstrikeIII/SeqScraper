@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import io
 import logging
 import socket
 import argparse
@@ -7,6 +6,9 @@ import re
 import requests
 import time
 import pandas as pd
+import os
+import redis
+import io
 
 # ---------------------
 # Argument Config
@@ -184,36 +186,87 @@ def run_mapping_pipeline(gene_list: list[str]) -> pd.DataFrame:
 
     Args:
         gene_list: list of gene names
-        output_tsv: name of output tsv file "results.tsv"
+
+    Returns:
+        dataframe: dataframe of uniprot results to send to Dash
     """
     if not gene_list:
         logging.warning("Gene List is empty. No job submission made.")
         return None
 
-    job_id = post_idmapping_job(gene_list)
+    # Setup Redis Connection
+    redis_host = os.environ.get("REDIS_HOST", "localhost")
+    try:
+        cache = redis.Redis(host=redis_host, port=6379, db=0, decode_responses=True)
+    except redis.ConnectionError:
+        logging.warning("Redis is not reachable. Falling back to API.")
+        cache = None
+
+    # List of dataframes for each gene
+    cached_dataframes = []
+    missing_genes = []
+
+    # Check each gene individually in Redis
+    for gene in gene_list:
+        if cache:
+            # Look for the individual gene key
+            gene_data = cache.get(f"uniprot_gene:{gene}")
+            if gene_data:
+                logging.info(f"REDIS HIT: Loaded '{gene}' from Redis.")
+                # Convert the saved JSON string back into a DataFrame
+                df_part = pd.read_json(io.StringIO(gene_data), orient="records")
+                cached_dataframes.append(df_part)
+                continue
+        
+        # If it's not in cache, add it to the missing list
+        missing_genes.append(gene)
+
+    # If all genes were in the cache, return concatenated dataframe
+    if not missing_genes:
+        logging.info("All genes found in database")
+        return pd.concat(cached_dataframes, ignore_index=True)
+
+    # Otherwise, query UniProt for the missing genes
+    logging.info(f"Querying API for {len(missing_genes)} missing gene(s)...")
+    job_id = post_idmapping_job(missing_genes)
     
     if not job_id:
         return None
 
-    logging.info("Attempting to poll for results")
+    # Poll for completion
     job_is_ready = False
-    
     for attempt in range(1, 21):
         status = get_job_status(job_id)
         if status is True:
-            logging.info("Job finished! Ready to download.")
             job_is_ready = True
             break
         elif status is None:
-            logging.error("A critical error or Job Failure occurred.")
             break
-        
-        logging.info(f"Attempt {attempt} - Job not finished. Retrying in {5 * attempt} seconds.")
         time.sleep(5 * attempt)
 
     if job_is_ready:
-        return fetch_uniprot_data(job_id)
-    
+        new_df = fetch_uniprot_data(job_id)
+        
+        if new_df is not None and not new_df.empty:
+            # Cache the new results for next time
+            if cache:
+                for gene in missing_genes:
+                    # Filter the DataFrame to grab only rows matching this specific gene
+                    # case=False ensures case insensitive
+                    gene_subset = new_df[new_df['From'].str.contains(gene, case=False, na=False)]
+                    
+                    if not gene_subset.empty:
+                        # Save this subset's JSON string to its own Redis key
+                        cache.set(f"uniprot_gene:{gene}", gene_subset.to_json(orient="records"))
+            
+            # Add the newly fetched data to our pile of cached data
+            cached_dataframes.append(new_df)
+
+        # Stitch everything together into one final DataFrame
+        if cached_dataframes:
+            final_df = pd.concat(cached_dataframes, ignore_index=True)
+            return final_df
+            
     return None
 
 def main():
@@ -227,7 +280,7 @@ def main():
             
             if result_df is not None:
                 print(f"Successfully retrieved {len(result_df)} records.")
-                # Save to TSV ONLY when running from the terminal
+                # Save to TSV only when running from the terminal (testing)
                 result_df.to_csv(OUTPUT_TSV, sep='\t', index=False)
                 print(f"Saved results to {OUTPUT_TSV}")
                 
