@@ -4,7 +4,7 @@ A Python-based dashboard designed to simplify the process of converting gene nam
 
 ## Scientific Motivation (Purpose)
 
-In biological research, I frequently need to find specific genes within newly sequenced or unannotated genomes (like mitochondrial or chloroplast assemblies). Manually looking up protein sequences, running BLAST via the command line, parsing the tabular output, and extracting the final sequences is tedious and error-prone.
+In biological research, I frequently find the need to locate specific genes within newly sequenced or unannotated genomes (like mitochondrial or chloroplast assemblies). Manually looking up protein sequences, running BLAST via the command line, parsing the tabular output, and extracting the final sequences is tedious and error-prone.
 
 SeqScraper automates this entire pipeline into a single, user-friendly graphical interface. Biologists can input common gene names, pick their preferred reviewed protein sequences, and instantly extract the full corresponding nucleotide sequences from their target genome into a clean, ready-to-use FASTA file for downstream analysis.
 
@@ -33,6 +33,15 @@ seqscraper-app-1  |  * Debug mode: on
 ```
 
 Go to the address listed through a web browser [0.0.0.0:8050](http://0.0.0.0:8050/). If you happen to be on a virtual machine or HPC, you may need to replace 0.0.0.0 with your IP address. You can use `curl ip.me` to find yours.
+
+### Stop the Container
+
+To stop the container, first close out the dashboard. In your terminal hit `ctrl + c` to stop the dashboard. You can then run the following command to teardown the Docker container to keep your environment clean.
+
+```bash
+# ctrl + c to force quit the Dash app
+docker compose down
+```
 
 ## Dashboard Usage
 
