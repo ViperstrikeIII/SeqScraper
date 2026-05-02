@@ -1,9 +1,10 @@
-import base64
 import dash
 from dash import dcc, html, dash_table, Input, Output, State
 import dash_bootstrap_components as dbc
 import pandas as pd
 import re
+import base64
+import textwrap
 
 # Import the pipeline we built in the other file
 from id_mapper import run_mapping_pipeline 
@@ -134,7 +135,6 @@ app.layout = dbc.Container([
     ])
 ], fluid=True, className="p-5")
 
-# Define the Callback
 @app.callback(
     Output('uniprot-results-table', 'data'),
     Input('search-button', 'n_clicks'),
@@ -142,6 +142,13 @@ app.layout = dbc.Container([
     prevent_initial_call=True 
 )
 def update_table(n_clicks, gene_string):
+    """
+    On click of search button, send list of gene names to uniprot requests API.
+
+    Args:
+        n_clicks: checks if button has been clicked to activate function
+        gene_string: text entered into box; list of gene names
+    """
     if not gene_string:
         return [] 
     
@@ -160,27 +167,83 @@ def update_table(n_clicks, gene_string):
     State('upload-fasta', 'filename'),
     prevent_initial_call=True 
 )
-def upload_fasta(contents, filename):
-    if contents is None:
+def handle_fasta_upload(contents, filename):
+    """
+    Reads in a file from user input and uploads file to persistant data volume
+
+    Args:
+        contents: file uploaded through dash
+        filename: name of file from dash
+    """
+    # Check if contents is None or empty
+    if not contents:
         return ""
 
-    # Split at comma to get just the base64 data
-    content_type, content_string = contents.split(',')
-    
-    # Decode the base64 string back into raw bytes
-    decoded_file = base64.b64decode(content_string)
+    # Make sure contents is a single str, not a list
+    if isinstance(contents, list):
+        contents = contents[0]
+        filename = filename[0]
 
-    # Save it to your Docker volume
-    save_path = f"/app/data/{filename}"
-    
+    # Ensure the base64 comma separator actually exists
+    if ',' not in contents:
+        return html.Span("Upload error: File data is missing the base64 header.", className="text-danger fw-bold")
+
     try:
+        content_type, content_string = contents.split(',', 1)
+        
+        # Decode the raw bytes
+        decoded_file = base64.b64decode(content_string)
+
+        # Save to the Docker mapped volume
+        save_path = f"/app/data/{filename}"
         with open(save_path, "wb") as f:
             f.write(decoded_file)
-        
-        # Return a success message to the UI
+            
         return html.Span(f"Successfully uploaded: {filename}", className="text-success fw-bold")
+        
     except Exception as e:
         return html.Span(f"Error saving file: {str(e)}", className="text-danger fw-bold")
+    
+@app.callback(
+    Output('save-status-message', 'children'),
+    Output('save-status-message', 'className'),
+    Input('save-fasta-button', 'n_clicks'),
+    State('uniprot-results-table', 'selected_rows'), 
+    State('uniprot-results-table', 'data'),          
+    prevent_initial_call=True
+)
+def save_selected_to_fasta(n_clicks, selected_rows, table_data):
+    if not selected_rows:
+        return "Please select at least one sequence from the table.", "mt-2 text-center fw-bold text-warning"
+    if not table_data:
+        return "", ""
+
+    fasta_lines = []
+    
+    for row_index in selected_rows:
+        row = table_data[row_index]
+        accession = row.get("Entry", "Unknown_ID")
+        gene_name = row.get("Gene Name", "Unknown_Gene")
+        organism = row.get("Organism", "Unknown_Organism")
+        sequence = row.get("Sequence", "")
+        
+        if not sequence:
+            continue 
+            
+        # Format FASTA: >Accession_GeneName Organism
+        header = f">{accession}_{gene_name} {organism}"
+        wrapped_sequence = "\n".join(textwrap.wrap(sequence, width=80))
+        fasta_lines.append(f"{header}\n{wrapped_sequence}")
+
+    final_fasta_string = "\n\n".join(fasta_lines)
+    output_path = "/app/data/query_sequences.fasta"
+    
+    try:
+        with open(output_path, "w") as f:
+            f.write(final_fasta_string)
+        return f"Saved {len(selected_rows)} sequence(s) to query_sequences.fasta! Ready for BLAST.", "mt-2 text-center fw-bold text-success"
+    except Exception as e:
+        return f"Error saving file: {str(e)}", "mt-2 text-center fw-bold text-danger"
     
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=8050)

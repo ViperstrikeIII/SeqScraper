@@ -2,3 +2,5 @@
 test_gene_names.txt
 my_gene_mapping.tsv
 __pycache__
+sequence.fasta
+query_sequences.fasta

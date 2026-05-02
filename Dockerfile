@@ -1,16 +1,22 @@
 FROM python:3.12
 
-# Install NCBI-Blast+ 
-RUN apt-get update && \
-    apt-get install -y ncbi-blast+ curl && \
-    rm -rf /var/lib/apt/lists/*
+# Install NCBI BLAST+ suite (makeblastdb, tblastn, blastdbcmd)
+RUN apt-get update && apt-get install -y \
+    ncbi-blast+ \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install requirements
+# Set the working directory inside the container
+WORKDIR /app
+
+# Copy the requirements file and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY id_mapper.py code/id_mapper.py
+# Copy all python scripts into the container
+COPY . .
 
-RUN chmod a+x /code/id_mapper.py
+# Expose the Dash port
+EXPOSE 8050
 
-ENV PATH="/code:$PATH"
+# Command to run Dash app
+CMD ["python", "app.py"]
