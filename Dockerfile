@@ -1,6 +1,13 @@
 FROM python:3.12
 
-RUN pip install requests
+# Install NCBI-Blast+ 
+RUN apt-get update && \
+    apt-get install -y ncbi-blast+ curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY id_mapper.py code/id_mapper.py
 

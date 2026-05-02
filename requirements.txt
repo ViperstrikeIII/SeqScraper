@@ -1,2 +1,4 @@
 requests==2.32.5
 dash==4.1.0
+dash-bootstrap-components
+pandas

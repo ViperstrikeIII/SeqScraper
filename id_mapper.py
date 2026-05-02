@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
+import io
 import logging
 import socket
 import argparse
 import re
 import requests
 import time
+import pandas as pd
 
 # ---------------------
 # Argument Config
@@ -20,7 +22,7 @@ parser.add_argument('-l', '--loglevel',
 
 parser.add_argument("-g", "--gene-names",
                     type=str,
-                    required=True,
+                    required=False,
                     help='path to text file of gene names (one line per gene)')
 
 parser.add_argument("-o", "--output-file",
@@ -139,16 +141,15 @@ def get_job_status(job_id: str) -> bool:
         logging.error(f"Request to status endpoint failed: {e}")
         return None
 
-def fetch_uniprot_data(job_id, output_filename="results.tsv"):
+def fetch_uniprot_data(job_id: str) -> pd.DataFrame:
     """
     Read in data from uniprot data stream using job id. Output results to tsv.
 
     Args:
         job_id: ID of uniprot job
-        output_filename: Where to output results
 
     Returns:
-        None: Outputs to file
+        df: Pandas dataframe of Uniprot output
     """
     url = f"https://rest.uniprot.org/idmapping/uniprotkb/results/stream/{job_id}"
     
@@ -161,64 +162,78 @@ def fetch_uniprot_data(job_id, output_filename="results.tsv"):
     logging.info(f"Fetching protein data from: {url}")
 
     try:
-        with requests.get(url, params=params, stream=True) as response:
-            response.raise_for_status()
-            
-            # Writing data chunk by chunk to avoid ram overflow
-            with open(output_filename, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-                    
-        logging.info(f"Download complete. Wrote to {output_filename}")
-        return
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        
+        # Convert the raw text string into an in-memory file to avoid disk writes
+        in_memory_file = io.StringIO(response.text)
+        
+        # Pandas reads in-memory file into a dataframe
+        df = pd.read_csv(in_memory_file, sep='\t')
+        
+        logging.info(f"Successfully loaded {len(df)} records into DataFrame.")
+        return df
 
     except Exception as e:
-        logging.error(f"Failed to fetch data: {e}")
-        return
+        logging.error(f"Failed to fetch data into DataFrame: {e}")
+        return None
+    
+def run_mapping_pipeline(gene_list: list[str]) -> pd.DataFrame:
+    """
+    Runs through uniprot fetching methods from start to finish. Handles waiting and status checking.
+
+    Args:
+        gene_list: list of gene names
+        output_tsv: name of output tsv file "results.tsv"
+    """
+    if not gene_list:
+        logging.warning("Gene List is empty. No job submission made.")
+        return None
+
+    job_id = post_idmapping_job(gene_list)
+    
+    if not job_id:
+        return None
+
+    logging.info("Attempting to poll for results")
+    job_is_ready = False
+    
+    for attempt in range(1, 21):
+        status = get_job_status(job_id)
+        if status is True:
+            logging.info("Job finished! Ready to download.")
+            job_is_ready = True
+            break
+        elif status is None:
+            logging.error("A critical error or Job Failure occurred.")
+            break
+        
+        logging.info(f"Attempt {attempt} - Job not finished. Retrying in {5 * attempt} seconds.")
+        time.sleep(5 * attempt)
+
+    if job_is_ready:
+        return fetch_uniprot_data(job_id)
+    
+    return None
 
 def main():
-    # Convert text file into list of genes
     try:
         with open(GENE_FILE, "r") as f:
             raw_gene_string = f.read()
-            gene_list = parse_gene_file(raw_gene_string)
+            genes = parse_gene_file(raw_gene_string)
+            
+            # Run the pipeline (gets a DataFrame back)
+            result_df = run_mapping_pipeline(genes)
+            
+            if result_df is not None:
+                print(f"Successfully retrieved {len(result_df)} records.")
+                # Save to TSV ONLY when running from the terminal
+                result_df.to_csv(OUTPUT_TSV, sep='\t', index=False)
+                print(f"Saved results to {OUTPUT_TSV}")
+                
     except FileNotFoundError:
         logging.error(f"Input gene name file {GENE_FILE} cannot be found.")
-        return
-
-    # Post job id
-    if gene_list:
-        job_id = post_idmapping_job(gene_list)
-    else:
-        logging.warning("Gene List is empty. No job submission made.")
-        return
-
-    # Check job status
-    job_is_ready = False
-    if job_id:
-        status = False
-        logging.info("Attempting to poll for results")
-
-        for attempt in range(1,21):
-            status = get_job_status(job_id)
-            if status is True:
-                logging.info("Job finished! Ready to download.")
-                job_is_ready = True
-                break
-            elif status is None:
-                logging.error("A critical error or Job Failure occurred.")
-                break
-            logging.info(f"Attempt {attempt} - Job not finished. Retrying in {5 * attempt} seconds.")
-            time.sleep(5 * attempt)
-    else:
-        logging.warning("Job ID not found.")
-
-    if job_is_ready:
-        success = fetch_uniprot_data(job_id, OUTPUT_TSV)
-        if success:
-            logging.info(f"Workflow complete. Check {OUTPUT_TSV} for results.")
     
 
-    
 if __name__ == "__main__":
     main()
