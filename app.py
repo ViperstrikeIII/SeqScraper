@@ -18,7 +18,7 @@ app = dash.Dash(__name__, title="SeqScraper", external_stylesheets=[dbc.themes.F
 app.layout = dbc.Container([
     # Header Row
     dbc.Row([
-            html.H1("SeqScraper: UniProt Gene Mapper", className="text-center my-4 fw-bold text-primary")
+            html.H1("SeqScraper: ID Mapper and Ortholog Scraper", className="text-center my-4 fw-bold text-primary")
     ]),
     
     # Input Section
