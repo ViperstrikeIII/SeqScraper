@@ -2,5 +2,7 @@
 test_gene_names.txt
 my_gene_mapping.tsv
 __pycache__
-sequence.fasta
+target_sequences*
 query_sequences.fasta
+blast_results.tsv
+final_extracted_hits.fasta
